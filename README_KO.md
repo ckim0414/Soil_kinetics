@@ -1,0 +1,45 @@
+# Soil Kinetic Lab v1.0 (v0.4 기반)
+
+토양–수용액 2상 오염물질 분석용 Streamlit 앱입니다. 기존 Kinetic Lab v0.4의 그래프 설정, 분석, Figure Builder를 바탕으로 확장했습니다.
+
+## Windows 실행
+압축 해제 → `start_windows.bat` 더블클릭. 처음 실행 시 인터넷 연결로 Python 패키지가 설치됩니다. 직접 실행 시 `pip install -r requirements.txt` 후 `streamlit run app.py`.
+
+## 입력 열
+Long CSV의 기본 열은 `condition,replicate,time,soil,aqueous,oxidant,dose`입니다.
+* soil: 토양 건조중량 기준 농도 mg/kg
+* aqueous: 수용액 농도 mg/L
+* oxidant: 농도 (기본 mM; 산화제 분석에서 변경 가능)
+* dose: 숫자 조건변수 (선택)
+* t=0: 모든 condition/replicate 조합에 1회 필수
+
+데모 데이터는 앱에서 예제 CSV 버튼을 눌러 받을 수 있습니다. Wide 업로드에서는 각 조건/반복별 토양·수용액 열 쌍을 지정합니다.
+
+## 질량수지
+반응기별 토양 건조질량 (g), 수용액 부피 (mL)를 입력합니다. 조건마다 다르면 조건별 설정 표에서 수정합니다.
+
+* soil_mass (mg) = soil (mg/kg) × soil_g / 1000
+* aqueous_mass (mg) = aqueous (mg/L) × water_ml / 1000
+* total_mass (mg) = soil_mass + aqueous_mass
+* removed_mass (mg) = total_mass(t=0) − total_mass(t)
+
+잔존율은 상별 초기량 기준과 전체 초기량 기준으로 CSV에 모두 저장합니다. 수용액 초기값이 0이어도 원자료 그래프는 표시됩니다.
+
+## 분석 탭
+1. 데이터 입력 / 질량수지: 데이터 업로드, 단위·반응기 설정, 계산 자료 CSV
+2. 오염물질 분석: 토양 및 전체 피팅(PFO/Second-order/Zero-order 선택), 수용액 관측값만 플로팅, 3상 패널
+3. 산화제 분석: 기존 독립 피팅
+4. 조건 비교: 토양, 전체, 산화제 k 막대/산점도, 회귀 및 오차막대
+5. 산화제 이용: 전체 모물질 소실 mol 대 수용액 내 산화제 소모 mol
+6. Figure Builder: 공통 그래프 스타일, 구성 및 PNG/TIFF/PDF/SVG 저장, 결과 ZIP
+
+## 이번 버전의 범위
+* 수용액 농도 증가·감소의 속도론 피팅은 **없습니다**. 임의의 탈착/산화 모델을 적용하지 않습니다.
+* 토양/수용액은 그래프에서 질량(mg) 기준입니다. 원 농도(mg/kg, mg/L)는 계산 CSV에 보존됩니다.
+* 반복 채수나 채취 후 보충으로 부피가 변하는 실험은 **고정 부피 가정이 성립하지 않습니다**. 현재 앱은 조건별 고정 부피를 가정합니다.
+* 측정된 산화제 수용액 감소량에는 산화제의 토양 내 분배 또는 회수 손실 등이 포함될 수 있습니다.
+* `apparent_stoichiometric_efficiency`는 선택적으로 입력한 이론 당량을 곱한 **겉보기 비율**이며 실제 무기화 효율이나 특정 반응경로 검증을 의미하지 않습니다.
+* 0 이하 초기 오염물질 총량, 중복 시점/조건, 유효하지 않은 용량 등을 검증합니다.
+
+## 확인 범위
+정적 파이썬 문법 검사와 계산 관련 단위 테스트(`test_analysis.py`, `test_mass_balance.py`)는 통과했습니다. 이 제작 환경에 Streamlit이 설치되어 있지 않고 온라인 설치가 불가해 Streamlit 화면의 통합 실행 테스트는 수행하지 못했습니다. `legacy_test_*_v04.py`는 원래 v0.4 UI 테스트를 참고용으로 보존한 파일이며 새 앱의 테스트가 아닙니다.
