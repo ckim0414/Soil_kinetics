@@ -14,10 +14,14 @@ def inventory(data, soil_g=10., water_ml=100., geometry=None):
     for c in KEYS+['soil','aqueous']:
         if c not in d: raise ValueError(f'필수 열 누락: {c}')
     for c in ['time','soil','aqueous']:
-        d[c]=pd.to_numeric(d[c],errors='raise')
-    if d[KEYS+['soil','aqueous']].isna().any().any():
-        raise ValueError('시간·토양·수용액 입력에 결측값이 있습니다.')
-    if not np.isfinite(d[['time','soil','aqueous']].to_numpy()).all() or (d[['time','soil','aqueous']]<0).any().any():
+        d[c]=pd.to_numeric(d[c],errors='coerce')
+    if d[KEYS].isna().any().any():
+        raise ValueError('Condition / Replicate / Time에는 결측값을 사용할 수 없습니다.')
+    # Completely blank measurements are not observations; retain partial phase measurements.
+    measures=['soil','aqueous']+(['oxidant'] if 'oxidant' in d.columns else [])
+    d=d.dropna(subset=measures,how='all').copy()
+    if d.empty:raise ValueError('유효한 측정값이 없습니다.')
+    if np.isinf(d[['time','soil','aqueous']].to_numpy(dtype=float)).any() or (d[['time','soil','aqueous']]<0).any().any():
         raise ValueError('음수 또는 무한대 농도/시간은 사용할 수 없습니다.')
     d['condition']=d.condition.astype(str);d['replicate']=d.replicate.astype(str)
     if d.duplicated(KEYS).any():raise ValueError('condition/replicate/time 중복 관측값이 있습니다.')
@@ -32,13 +36,15 @@ def inventory(data, soil_g=10., water_ml=100., geometry=None):
         if d[c].isna().any() or (~np.isfinite(d[c])).any() or (d[c]<=0).any():raise ValueError(c+'은 유한한 양수여야 합니다.')
     d['soil_mass']=d.soil*d.soil_g/1000.
     d['aqueous_mass']=d.aqueous*d.water_ml/1000.
+    # A total is known only when both phases were actually measured at the same time.
     d['total_mass']=d.soil_mass+d.aqueous_mass
     init=d.loc[d.time==0,KEYS[:2]+['soil_mass','aqueous_mass','total_mass']].copy()
     if init.duplicated(KEYS[:2]).any():raise ValueError('각 반복실험에 t=0 데이터는 한 개여야 합니다.')
     init=init.rename(columns={c:c+'_initial' for c in ['soil_mass','aqueous_mass','total_mass']})
     d=d.merge(init,on=KEYS[:2],how='left',validate='many_to_one')
-    if d.total_mass_initial.isna().any() or (d.total_mass_initial<=0).any():
-        raise ValueError('각 조건/반복실험에 양수인 전체 초기 오염물질량(t=0)이 필요합니다.')
+    # A replicate without a complete t=0 is still usable for raw phase plots.
+    # Its normalized and total-removal outputs remain NaN, never fabricated.
+    d.loc[d.total_mass_initial<=0,'total_mass_initial']=np.nan
     for phase in ['soil','aqueous','total']:
         m='total_mass' if phase=='total' else phase+'_mass'
         d[phase+'_fraction_of_initial_total']=d[m]/d.total_mass_initial

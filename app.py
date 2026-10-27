@@ -117,10 +117,19 @@ with tabs[0]:
         condnames=list(pd.Series(d.condition).dropna().astype(str).unique())
         geom=pd.DataFrame({'condition':condnames,'soil_g':soil_g,'water_ml':water_ml})
         geom=st.data_editor(geom,hide_index=True,disabled=['condition'],key='soil_geometry')
+        input_rows=len(d)
         d=inventory(d,geometry=geom)
+        skipped=input_rows-len(d)
+        if skipped:st.info(f'모든 측정값이 비어 있는 {skipped}행은 제외했습니다.')
+        missing=d[['soil','aqueous']].isna().sum()
+        incomplete=d.total_mass.isna().sum()
+        if missing.any():st.info(f'부분 결측은 유지합니다: 토양 {missing["soil"]}건, 수용액 {missing["aqueous"]}건. 전체 질량은 두 상이 모두 측정된 {len(d)-incomplete}개 행에서만 계산합니다.')
+        missing_initial=d.loc[d.total_mass_initial.isna(),['condition','replicate']].drop_duplicates()
+        if len(missing_initial):st.warning(f'완전한 t=0 총량이 없는 반복실험 {len(missing_initial)}개는 전체 정규화·제거량 계산에서 제외됩니다. 원자료는 유지됩니다.')
         if 'oxidant' in d:
             d['oxidant']=pd.to_numeric(d.oxidant,errors='coerce')
             if ((d.oxidant.dropna()<0).any() or np.isinf(d.oxidant).any()):raise ValueError('산화제 농도를 확인하세요.')
+        st.caption('결측값은 0으로 대체하지 않으며, 두 상 중 하나라도 결측이면 해당 시점 전체 질량 및 제거량을 계산하지 않습니다.')
         st.caption('total_mass = soil(mg/kg) × soil_g/1000 + aqueous(mg/L) × water_ml/1000. 잔존율은 각 반복의 전체 초기질량 기준입니다.')
         st.download_button('계산된 질량수지 CSV',d.to_csv(index=False).encode(),'soil_mass_balance.csv')
     except Exception as e:st.error(str(e));st.stop()
@@ -200,10 +209,20 @@ def render(name):
     finally:plt.close(fig)
 
 def calculate(col,cfg):
-    source=baseline(d,col) if cfg['norm'] else d.assign(normalized=d[col]);result=[];curves={};residual=[];failures=[]
-    if cfg['model']=='None':return dict(source=source,summary=pd.DataFrame(),curves=curves,residual=pd.DataFrame(),cfg=cfg,failures=[])
+    source=d.assign(normalized=d[col].astype(float)).copy()
+    failures=[]
+    if cfg['norm']:
+        source['normalized']=np.nan
+        for (condition,rep),g in source.groupby(['condition','replicate'],sort=False):
+            b=g.loc[(g.time==0)&g[col].notna(),col]
+            if len(b)==1 and float(b.iloc[0])>0:
+                source.loc[g.index,'normalized']=g[col]/float(b.iloc[0])
+            else:
+                failures.append(f'{condition}/{rep}: {col}의 양수 t=0 값이 없어 정규화 및 피팅에서 제외 (원자료 보존)')
+    result=[];curves={};residual=[]
+    if cfg['model']=='None':return dict(source=source,summary=pd.DataFrame(),curves=curves,residual=pd.DataFrame(),cfg=cfg,failures=failures)
     for cond,g in source.groupby('condition',sort=False):
-        subset=g[g.time.between(cfg['tmin'],cfg['tmax'])]
+        subset=g[g.time.between(cfg['tmin'],cfg['tmax']) & g.normalized.notna()]
         groups=[('mean',subset.groupby('time',as_index=False).normalized.mean())] if cfg['strategy']=='mean' else list(subset.groupby('replicate'))
         fitted=[]
         for rep,h in groups:
@@ -223,7 +242,8 @@ def calculate(col,cfg):
 def kinetics(ax,col,name):
     a=analyses[col];cfg=a['cfg'];op=options[name]
     for cond,g in a['source'].groupby('condition',sort=False):
-        agg=g.groupby('time').normalized.agg(['mean','std']);s=marker_style(cond)
+        agg=g.groupby('time').normalized.agg(['mean','std']).dropna(subset=['mean']);s=marker_style(cond)
+        if agg.empty:continue
         if op['points']:
             ax.errorbar(agg.index,agg['mean'],yerr=agg['std'].fillna(0),linestyle='none',capsize=3,**s)
             if cfg['raw']:
@@ -347,10 +367,11 @@ def kplot(ax,col,name,opts,effect,reg):
 with tabs[3]:
     st.caption('조건 회귀는 조건별 k에 대한 비가중 회귀입니다. 서로 다른 모델/단위의 k는 직접 비교하지 마세요.')
     st.subheader('수용액 특성 비교 (피팅 없음)')
-    aqpeak=d.loc[d.groupby(['condition','replicate'])['aqueous'].idxmax(),['condition','replicate','time','aqueous']].rename(columns={'time':'peak_time','aqueous':'peak_concentration_mg_L'})
+    aqvalid=d.dropna(subset=['aqueous'])
+    aqpeak=aqvalid.loc[aqvalid.groupby(['condition','replicate'])['aqueous'].idxmax(),['condition','replicate','time','aqueous']].rename(columns={'time':'peak_time','aqueous':'peak_concentration_mg_L'}) if not aqvalid.empty else pd.DataFrame(columns=['condition','replicate','peak_time','peak_concentration_mg_L'])
     aqsummary=aqpeak.groupby('condition',as_index=False).agg(peak_concentration_mean=('peak_concentration_mg_L','mean'),peak_concentration_sd=('peak_concentration_mg_L','std'),peak_time_mean=('peak_time','mean'),peak_time_sd=('peak_time','std'))
     st.dataframe(aqsummary,hide_index=True)
-    st.caption('측정된 시간점 가운데 최대 수용액 농도를 선택합니다. 모델로 추정한 최대값이 아니며, 동일 최대값이면 최초 관측시점을 사용합니다.')
+    st.caption('수용액 결측은 제외하고 측정된 시간점 가운데 최대 수용액 농도를 선택합니다. 모델로 추정한 최대값이 아니며, 동일 최대값이면 최초 관측시점을 사용합니다.')
     st.download_button('수용액 최대값 요약 CSV',aqsummary.to_csv(index=False).encode(),'aqueous_peak_summary.csv',key='aq_peak_csv')
     peakmetric=st.selectbox('수용액 비교 지표',['최대 농도 (mg/L)','최대 농도 도달시간 ('+timeunit+')'],key='effect_aq_peakmetric')
     peakchart=st.selectbox('수용액 비교 그래프',['Bar','Scatter'],key='effect_aq_peakchart')
